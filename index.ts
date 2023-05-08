@@ -1,10 +1,5 @@
 import path from "path";
-
-import {
-	Project,
-	ScriptTarget,
-	Node,
-} from "ts-morph";
+import { Project, ScriptTarget, Node, ArrowFunction } from "ts-morph";
 
 import type {
 	ClassDeclaration,
@@ -20,6 +15,7 @@ import type {
 	SourceFile,
 	TypeAliasDeclaration,
 	TypedNode,
+	VariableStatement,
 } from "ts-morph";
 
 declare module "ts-morph" {
@@ -28,23 +24,24 @@ declare module "ts-morph" {
 		let isObjectProperty: (node: Node) => boolean;
 	}
 }
-Node.isObjectProperty = (node): node is ObjectProperty => (
-	Node.isPropertyDeclaration(node)
-	|| Node.isPropertyAssignment(node)
-	|| Node.isPropertySignature(node)
-);
+Node.isObjectProperty = (node): node is ObjectProperty =>
+	Node.isPropertyDeclaration(node) ||
+	Node.isPropertyAssignment(node) ||
+	Node.isPropertySignature(node);
 
-type ObjectProperty = JSDocableNode & TypedNode & (
-	| PropertyDeclaration
-	| PropertyAssignment
-	| PropertySignature
-);
-type ClassMemberNode = JSDocableNode & ModifierableNode & ObjectProperty & MethodDeclaration;
+type ObjectProperty = JSDocableNode &
+	TypedNode &
+	(PropertyDeclaration | PropertyAssignment | PropertySignature);
+type ClassMemberNode = JSDocableNode &
+	ModifierableNode &
+	ObjectProperty &
+	MethodDeclaration;
 
 /** Get children for object node */
 function getChildProperties(node: Node): ObjectProperty[] {
 	const properties = node?.getType()?.getProperties();
-	const valueDeclarations = properties.map((child) => child.getValueDeclaration())
+	const valueDeclarations = properties
+		.map((child) => child.getValueDeclaration())
 		// Hacky way to check if the child is actually a defined child in the interface
 		// or if it's, e.g. a built-in method of the type (such as array.length)
 		?.filter((child) => node.getFullText().includes(child?.getFullText()));
@@ -53,6 +50,10 @@ function getChildProperties(node: Node): ObjectProperty[] {
 
 /** Get JSDoc for a node or create one if there isn't any */
 function getJsDocOrCreate(node: JSDocableNode): JSDoc {
+	node = // @ts-ignore
+		Node.isArrowFunction(node)
+			? (node.getParent().getParent().getParent() as any)
+			: node;
 	return node.getJsDocs()[0] || node.addJsDoc({});
 }
 
@@ -60,7 +61,9 @@ function getJsDocOrCreate(node: JSDocableNode): JSDoc {
 function sanitizeType(str: string): string | null {
 	if (!str) return null;
 	// Convert `typeof MyClass` syntax to `Class<MyClass>`
-	const extractedClassFromTypeof = /{*typeof\s+([^(?:}|\s);]*)/gm.exec(str)?.[1];
+	const extractedClassFromTypeof = /{*typeof\s+([^(?:}|\s);]*)/gm.exec(
+		str
+	)?.[1];
 	if (extractedClassFromTypeof) str = `Class<${extractedClassFromTypeof}>`;
 	return str;
 }
@@ -68,7 +71,9 @@ function sanitizeType(str: string): string | null {
 /**
  * Generate @param documentation from function parameters, storing it in functionNode
  */
-function generateParameterDocumentation(functionNode: FunctionLikeDeclaration): void {
+function generateParameterDocumentation(
+	functionNode: FunctionLikeDeclaration | ArrowFunction
+): void {
 	const params = functionNode.getParameters();
 	for (const param of params) {
 		const parameterType = sanitizeType(param.getTypeNode()?.getText());
@@ -89,7 +94,9 @@ function generateParameterDocumentation(functionNode: FunctionLikeDeclaration): 
 			const comment = paramTag.getComment();
 			const tagName = paramTag.getTagName();
 
-			paramTag.replaceWithText(`@${tagName} {${parameterType}}${paramName}  ${comment}`);
+			paramTag.replaceWithText(
+				`@${tagName} {${parameterType}}${paramName}  ${comment}`
+			);
 		} else {
 			jsDoc.addTag({
 				tagName: "param",
@@ -102,11 +109,16 @@ function generateParameterDocumentation(functionNode: FunctionLikeDeclaration): 
 /**
  * Generate @returns documentation from function return type, storing it in functionNode
  */
-function generateReturnTypeDocumentation(functionNode: FunctionLikeDeclaration): void {
-	const functionReturnType = sanitizeType(functionNode.getReturnType()?.getText());
+function generateReturnTypeDocumentation(
+	functionNode: FunctionLikeDeclaration
+): void {
+	const functionReturnType = sanitizeType(
+		functionNode.getReturnType()?.getText()
+	);
 	const jsDoc = getJsDocOrCreate(functionNode);
-	const returnsTag = (jsDoc?.getTags() || [])
-		.find((tag) => ["returns", "return"].includes(tag.getTagName()));
+	const returnsTag = (jsDoc?.getTags() || []).find((tag) =>
+		["returns", "return"].includes(tag.getTagName())
+	);
 	// Replace tag with one that contains type info if tag exists
 	if (returnsTag) {
 		const tagName = returnsTag.getTagName();
@@ -114,7 +126,7 @@ function generateReturnTypeDocumentation(functionNode: FunctionLikeDeclaration):
 		// https://github.com/google/closure-compiler/wiki/Annotating-JavaScript-for-the-Closure-Compiler#return-type-description
 		if (functionReturnType !== "void") {
 			returnsTag.replaceWithText(
-				`@${tagName} {${functionReturnType}}${comment ? ` ${comment}` : ""}`,
+				`@${tagName} {${functionReturnType}}${comment ? ` ${comment}` : ""}`
 			);
 		}
 	} else {
@@ -129,9 +141,35 @@ function generateReturnTypeDocumentation(functionNode: FunctionLikeDeclaration):
 /**
  * Generate documentation for a function, storing it in functionNode
  */
-function generateFunctionDocumentation(functionNode: FunctionLikeDeclaration): void {
+function generateFunctionDocumentation(
+	functionNode: FunctionLikeDeclaration
+): void {
 	generateParameterDocumentation(functionNode);
 	generateReturnTypeDocumentation(functionNode);
+	functionNode.getFunctions().forEach(generateFunctionDocumentation);
+	functionNode.getVariableStatements().forEach(generateVariableDocumentation);
+}
+
+function generateVariableDocumentation(node: VariableStatement): void {
+	for (const declaration of node.getDeclarations()) {
+		if (declaration.getName() === "__tsToJsdoc_protectCommentsHeader") {
+			continue;
+		}
+
+		const initializer = declaration.getInitializer();
+		if (
+			Node.isFunctionLikeDeclaration(initializer) ||
+			Node.isArrowFunction(initializer)
+		) {
+			generateFunctionDocumentation(initializer);
+		} else {
+			const type = sanitizeType(declaration.getTypeNode()?.getText());
+			if (type) {
+				const jsDoc = getJsDocOrCreate(node);
+				jsDoc.addTag({ tagName: "type", text: `{${type}}` });
+			}
+		}
+	}
 }
 
 /** Generate modifier documentation for class member */
@@ -139,7 +177,9 @@ function generateModifierDocumentation(classMemberNode: ClassMemberNode): void {
 	const modifiers = classMemberNode.getModifiers() || [];
 	for (const modifier of modifiers) {
 		const text = modifier?.getText();
-		if (["public", "private", "protected", "readonly", "static"].includes(text)) {
+		if (
+			["public", "private", "protected", "readonly", "static"].includes(text)
+		) {
 			const jsDoc = getJsDocOrCreate(classMemberNode);
 			jsDoc.addTag({ tagName: text });
 		}
@@ -150,7 +190,9 @@ function generateModifierDocumentation(classMemberNode: ClassMemberNode): void {
  * Create class property initializer in constructor if it doesn't exist
  * so that documentation is preserved when transpiling
  */
-function generateInitializerDocumentation(classPropertyNode: ObjectProperty): void {
+function generateInitializerDocumentation(
+	classPropertyNode: ObjectProperty
+): void {
 	const jsDoc = getJsDocOrCreate(classPropertyNode);
 	if (!classPropertyNode.getStructure()?.initializer) {
 		classPropertyNode.setInitializer("undefined");
@@ -171,10 +213,14 @@ function generateClassBaseDocumentation(classNode: ClassDeclaration) {
 }
 
 /** Generate documentation for class members in general; either property or method */
-function generateClassMemberDocumentation(classMemberNode: ClassMemberNode): void {
+function generateClassMemberDocumentation(
+	classMemberNode: ClassMemberNode
+): void {
 	generateModifierDocumentation(classMemberNode);
-	Node.isObjectProperty(classMemberNode) && generateInitializerDocumentation(classMemberNode);
-	Node.isMethodDeclaration(classMemberNode) && generateFunctionDocumentation(classMemberNode);
+	Node.isObjectProperty(classMemberNode) &&
+		generateInitializerDocumentation(classMemberNode);
+	Node.isMethodDeclaration(classMemberNode) &&
+		generateFunctionDocumentation(classMemberNode);
 }
 
 /** Generate documentation for a class — itself and its members */
@@ -189,7 +235,7 @@ function generateClassDocumentation(classNode: ClassDeclaration): void {
  */
 function generateTypedefDocumentation(
 	typeNode: TypeAliasDeclaration,
-	sourceFile: SourceFile,
+	sourceFile: SourceFile
 ): string {
 	// Create dummy node to assign typedef documentation to
 	// (will be deleted afterwards)
@@ -198,28 +244,38 @@ function generateTypedefDocumentation(
 	if (typeof type !== "string") return;
 	type = sanitizeType(type);
 	const dummyNode = sourceFile.addVariableStatement({
-		declarations: [{
-			name: `__dummy${name}`,
-			initializer: "null",
-		}],
+		declarations: [
+			{
+				name: `__dummy${name}`,
+				initializer: "null",
+			},
+		],
 	});
 	const typeParams = typeNode.getTypeParameters();
-	const jsDoc = dummyNode.addJsDoc({
-		tags: [{
-			tagName: "typedef",
-			text: `{${type}} ${name}`,
-		},
-		...typeParams.map((param) => {
-			const constraint = param.getConstraint();
-			const defaultType = param.getDefault();
-			const paramName = param.getName();
-			const nameWithDefault = defaultType ? `[${paramName}=${defaultType.getText()}]` : paramName;
-			return {
-				tagName: "template",
-				text: `${constraint ? `{${constraint.getText()}} ` : ""}${nameWithDefault}`,
-			};
-		})],
-	}).getText();
+	const jsDoc = dummyNode
+		.addJsDoc({
+			tags: [
+				{
+					tagName: "typedef",
+					text: `{${type}} ${name}`,
+				},
+				...typeParams.map((param) => {
+					const constraint = param.getConstraint();
+					const defaultType = param.getDefault();
+					const paramName = param.getName();
+					const nameWithDefault = defaultType
+						? `[${paramName}=${defaultType.getText()}]`
+						: paramName;
+					return {
+						tagName: "template",
+						text: `${
+							constraint ? `{${constraint.getText()}} ` : ""
+						}${nameWithDefault}`,
+					};
+				}),
+			],
+		})
+		.getText();
 	dummyNode.remove();
 	return jsDoc;
 }
@@ -236,19 +292,21 @@ function generateObjectPropertyDocumentation(
 	node: ObjectProperty,
 	jsDoc: JSDoc,
 	name = "",
-	topLevelCall = true,
+	topLevelCall = true
 ): void {
 	name = name || node.getName();
 	if (!topLevelCall) name = `${name}.${node.getName()}`;
-	let propType = node.getTypeNode()
+	let propType = node
+		.getTypeNode()
 		?.getText()
 		?.replace(/\n/g, "")
 		?.replace(/\s/g, "");
 	propType = sanitizeType(propType);
 
-	const isOptional = node.hasQuestionToken()
-		|| node.getJsDocs()
-			?.[0]
+	const isOptional =
+		node.hasQuestionToken() ||
+		node
+			.getJsDocs()?.[0]
 			?.getTags()
 			?.some((tag) => tag.getTagName() === "optional");
 	// Copy over existing description if there is one
@@ -259,16 +317,22 @@ function generateObjectPropertyDocumentation(
 
 	jsDoc.addTag({
 		tagName: "property",
-		text: `{${propType}} ${isOptional ? `[${name}]` : name} ${existingPropDocs}`,
+		text: `{${propType}} ${
+			isOptional ? `[${name}]` : name
+		} ${existingPropDocs}`,
 	});
 
 	if (children.length) {
-		children.forEach((child) => generateObjectPropertyDocumentation(child, jsDoc, name, false));
+		children.forEach((child) =>
+			generateObjectPropertyDocumentation(child, jsDoc, name, false)
+		);
 	}
 }
 
 /** Generate @typedefs from interfaces */
-function generateInterfaceDocumentation(interfaceNode: InterfaceDeclaration): string {
+function generateInterfaceDocumentation(
+	interfaceNode: InterfaceDeclaration
+): string {
 	const name = interfaceNode.getName();
 	const jsDoc = getJsDocOrCreate(interfaceNode);
 
@@ -292,11 +356,12 @@ function transpile(
 	src: string,
 	filename = "input.ts",
 	compilerOptions: object = {},
-	debug = false,
+	debug = false
 ): string {
 	// Useless variable to prevent comments from getting removed when code contains just
 	// typedefs/interfaces, which get transpiled to nothing but comments
-	const protectCommentsHeader = "const __tsToJsdoc_protectCommentsHeader = 1;\n";
+	const protectCommentsHeader =
+		"const __tsToJsdoc_protectCommentsHeader = 1;\n";
 
 	try {
 		const project = new Project({
@@ -311,27 +376,36 @@ function transpile(
 		// ts-morph throws a fit if the path already exists
 		const sourceFile = project.createSourceFile(
 			`${path.basename(filename, ".ts")}.ts-to-jsdoc.ts`,
-			code,
+			code
 		);
 
 		sourceFile.getClasses().forEach(generateClassDocumentation);
 
-		const typedefs = sourceFile.getTypeAliases()
-			.map((typeAlias) => generateTypedefDocumentation(typeAlias, sourceFile)).join("\n");
+		const typedefs = sourceFile
+			.getTypeAliases()
+			.map((typeAlias) => generateTypedefDocumentation(typeAlias, sourceFile))
+			.join("\n");
 
-		const interfaces = sourceFile.getInterfaces()
-			.map((interfaceNode) => generateInterfaceDocumentation(interfaceNode)).join("\n");
+		const interfaces = sourceFile
+			.getInterfaces()
+			.map((interfaceNode) => generateInterfaceDocumentation(interfaceNode))
+			.join("\n");
 
 		sourceFile.getFunctions().forEach(generateFunctionDocumentation);
 
-		let result = project.emitToMemory()?.getFiles()?.[0]?.text;
+		sourceFile.getVariableStatements().forEach(generateVariableDocumentation);
+
+		let result = project
+			.emitToMemory()
+			?.getFiles()
+			?.find((f) => f.filePath.includes(".ts-to-jsdoc."))?.text;
 		if (result) {
 			if (!result.startsWith(protectCommentsHeader)) {
 				throw new Error(
-					"Internal error: generated header is missing in output.\n\n"
-					+ `Output: ${
-						JSON.stringify(`${result.slice(protectCommentsHeader.length + 100)} ...`)
-					}`,
+					"Internal error: generated header is missing in output.\n\n" +
+						`Output: ${JSON.stringify(
+							`${result.slice(protectCommentsHeader.length + 100)} ...`
+						)}`
 				);
 			}
 			result = result.slice(protectCommentsHeader.length);

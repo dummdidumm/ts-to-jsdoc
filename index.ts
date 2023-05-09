@@ -65,6 +65,7 @@ function sanitizeType(str: string): string | null {
 		str
 	)?.[1];
 	if (extractedClassFromTypeof) str = `Class<${extractedClassFromTypeof}>`;
+	str = str.replace(/\/\*\*.+?\*\//gs, ""); // strip out jsdoc comments
 	return str;
 }
 
@@ -323,9 +324,11 @@ function generateObjectPropertyDocumentation(
 	});
 
 	if (children.length) {
-		children.forEach((child) =>
-			generateObjectPropertyDocumentation(child, jsDoc, name, false)
-		);
+		children
+			.filter((child) => child !== node)
+			.forEach((child) =>
+				generateObjectPropertyDocumentation(child, jsDoc, name, false)
+			);
 	}
 }
 

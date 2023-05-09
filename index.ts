@@ -409,6 +409,8 @@ function transpile(
 				);
 			}
 			result = result.slice(protectCommentsHeader.length);
+			result = result.replace(/(\S)\n((\t| )*\/\*\* @)/g, "$1\n\n$2");
+			result = result.replace(/(\t| )*\/\*\* @/g, "$1/**\n$1 * @");
 			return `${result}\n\n${typedefs}\n\n${interfaces}`;
 		}
 		throw new Error("Could not emit output to memory.");

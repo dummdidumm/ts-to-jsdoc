@@ -69,6 +69,9 @@ function getJsDocOrCreate(node: JSDocableNode): JSDoc {
 
 function resolve_type(node: Node, type: TypeNode | Type | undefined) {
 	const text = type?.getText();
+	if (!text) {
+		return "";
+	}
 	let is_default = false;
 	let imported = node
 		.getSourceFile()
@@ -85,13 +88,16 @@ function resolve_type(node: Node, type: TypeNode | Type | undefined) {
 			}
 			return found;
 		});
-	const import_str = imported
-		? `import('${
-				imported.getModuleSpecifierValue().endsWith(".js")
-					? imported.getModuleSpecifierValue()
-					: `${imported.getModuleSpecifierValue()}.js`
-		  }').`
-		: "";
+
+	let import_str = "";
+	if (imported) {
+		let specifier = imported.getModuleSpecifierValue();
+		if (specifier.startsWith(".") && !specifier.endsWith(".js")) {
+			specifier = specifier + ".js";
+		}
+		import_str = `import('${specifier}').`;
+	}
+
 	return `${import_str}${is_default ? "default" : text}`;
 }
 

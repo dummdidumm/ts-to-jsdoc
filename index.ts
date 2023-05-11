@@ -1,5 +1,12 @@
 import path from "path";
-import { Project, ScriptTarget, Node, ArrowFunction } from "ts-morph";
+import {
+	Project,
+	ScriptTarget,
+	Node,
+	ArrowFunction,
+	ObjectLiteralExpression,
+	ExportAssignment,
+} from "ts-morph";
 
 import type {
 	ClassDeclaration,
@@ -51,7 +58,8 @@ function getChildProperties(node: Node): ObjectProperty[] {
 /** Get JSDoc for a node or create one if there isn't any */
 function getJsDocOrCreate(node: JSDocableNode): JSDoc {
 	node = // @ts-ignore
-		Node.isArrowFunction(node)
+		Node.isArrowFunction(node) &&
+		Node.isVariableStatement(node.getParent().getParent().getParent())
 			? (node.getParent().getParent().getParent() as any)
 			: node;
 	return node.getJsDocs()[0] || node.addJsDoc({});
@@ -113,6 +121,8 @@ function generateParameterDocumentation(
 function generateReturnTypeDocumentation(
 	functionNode: FunctionLikeDeclaration
 ): void {
+	if (!functionNode.getReturnTypeNode()) return; // Don't let ts-morph infer the type, let TS do it
+
 	const functionReturnType = sanitizeType(
 		functionNode.getReturnType()?.getText()
 	);
@@ -169,7 +179,38 @@ function generateVariableDocumentation(node: VariableStatement): void {
 				const jsDoc = getJsDocOrCreate(node);
 				jsDoc.addTag({ tagName: "type", text: `{${type}}` });
 			}
+
+			if (Node.isObjectLiteralExpression(initializer)) {
+				generateObjectLiteralExpressionDocumentation(initializer);
+			}
 		}
+	}
+}
+
+function generateObjectLiteralExpressionDocumentation(
+	node: ObjectLiteralExpression
+) {
+	for (const property of node.getProperties()) {
+		if (Node.isPropertyAssignment(property)) {
+			const initializer = property.getInitializer();
+			if (Node.isObjectLiteralExpression(initializer)) {
+				generateObjectLiteralExpressionDocumentation(initializer);
+			} else if (
+				Node.isFunctionLikeDeclaration(initializer) ||
+				Node.isArrowFunction(initializer)
+			) {
+				generateFunctionDocumentation(initializer);
+			}
+		} else if (Node.isMethodDeclaration(property)) {
+			generateFunctionDocumentation(property);
+		}
+	}
+}
+
+function generateExportDocumentation(node: ExportAssignment) {
+	const expression = node.getExpression();
+	if (Node.isObjectLiteralExpression(expression)) {
+		generateObjectLiteralExpressionDocumentation(expression);
 	}
 }
 
@@ -201,6 +242,12 @@ function generateInitializerDocumentation(
 	const initializer = classPropertyNode.getStructure()?.initializer;
 	if (initializer !== "undefined") {
 		jsDoc.addTag({ tagName: "default", text: initializer });
+	}
+	if (classPropertyNode.getTypeNode()) {
+		const type = sanitizeType(classPropertyNode.getTypeNode()?.getText());
+		if (type) {
+			jsDoc.addTag({ tagName: "type", text: `{${type}}` });
+		}
 	}
 }
 
@@ -397,6 +444,8 @@ function transpile(
 		sourceFile.getFunctions().forEach(generateFunctionDocumentation);
 
 		sourceFile.getVariableStatements().forEach(generateVariableDocumentation);
+
+		sourceFile.getExportAssignments().forEach(generateExportDocumentation);
 
 		let result = project
 			.emitToMemory()

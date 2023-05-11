@@ -1,11 +1,13 @@
 import path from "path";
 import {
+	ArrowFunction,
+	ExportAssignment,
+	Node,
+	ObjectLiteralExpression,
 	Project,
 	ScriptTarget,
-	Node,
-	ArrowFunction,
-	ObjectLiteralExpression,
-	ExportAssignment,
+	Type,
+	TypeNode,
 } from "ts-morph";
 
 import type {
@@ -65,6 +67,34 @@ function getJsDocOrCreate(node: JSDocableNode): JSDoc {
 	return node.getJsDocs()[0] || node.addJsDoc({});
 }
 
+function resolve_type(node: Node, type: TypeNode | Type | undefined) {
+	const text = type?.getText();
+	let is_default = false;
+	let imported = node
+		.getSourceFile()
+		.getImportDeclarations()
+		.find((i) => {
+			let found = !!i.getNamedImports().find((n) => {
+				return n.getName() === text;
+			});
+			if (!found) {
+				found = i.getDefaultImport()?.getText() === text;
+				if (found) {
+					is_default = true;
+				}
+			}
+			return found;
+		});
+	const import_str = imported
+		? `import('${
+				imported.getModuleSpecifierValue().endsWith(".js")
+					? imported.getModuleSpecifierValue()
+					: `${imported.getModuleSpecifierValue()}.js`
+		  }').`
+		: "";
+	return `${import_str}${is_default ? "default" : text}`;
+}
+
 /** Sanitize a string to use as a type in a doc comment so that it is compatible with JSDoc */
 function sanitizeType(str: string): string | null {
 	if (!str) return null;
@@ -85,7 +115,8 @@ function generateParameterDocumentation(
 ): void {
 	const params = functionNode.getParameters();
 	for (const param of params) {
-		const parameterType = sanitizeType(param.getTypeNode()?.getText()) || "any";
+		const parameterType =
+			sanitizeType(resolve_type(param, param.getTypeNode())) || "any";
 		// Get param tag that matches the param
 		const jsDoc = getJsDocOrCreate(functionNode);
 		const paramTag = (jsDoc.getTags() || [])
@@ -127,7 +158,7 @@ function generateReturnTypeDocumentation(
 	if (!functionNode.getReturnTypeNode()) return; // Don't let ts-morph infer the type, let TS do it
 
 	const functionReturnType = sanitizeType(
-		functionNode.getReturnType()?.getText()
+		resolve_type(functionNode as any, functionNode.getReturnType())
 	);
 	const jsDoc = getJsDocOrCreate(functionNode);
 	const returnsTag = (jsDoc?.getTags() || []).find((tag) =>
@@ -177,7 +208,9 @@ function generateVariableDocumentation(node: VariableStatement): void {
 		) {
 			generateFunctionDocumentation(initializer);
 		} else {
-			const type = sanitizeType(declaration.getTypeNode()?.getText());
+			const type = sanitizeType(
+				resolve_type(declaration, declaration.getTypeNode())
+			);
 			if (type) {
 				const jsDoc = getJsDocOrCreate(node);
 				jsDoc.addTag({ tagName: "type", text: `{${type}}` });
@@ -247,7 +280,9 @@ function generateInitializerDocumentation(
 		jsDoc.addTag({ tagName: "default", text: initializer });
 	}
 	if (classPropertyNode.getTypeNode()) {
-		const type = sanitizeType(classPropertyNode.getTypeNode()?.getText());
+		const type = sanitizeType(
+			resolve_type(classPropertyNode, classPropertyNode.getTypeNode())
+		);
 		if (type) {
 			jsDoc.addTag({ tagName: "type", text: `{${type}}` });
 		}

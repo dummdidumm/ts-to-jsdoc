@@ -85,8 +85,7 @@ function generateParameterDocumentation(
 ): void {
 	const params = functionNode.getParameters();
 	for (const param of params) {
-		const parameterType = sanitizeType(param.getTypeNode()?.getText());
-		if (!parameterType) continue;
+		const parameterType = sanitizeType(param.getTypeNode()?.getText()) || "any";
 		// Get param tag that matches the param
 		const jsDoc = getJsDocOrCreate(functionNode);
 		const paramTag = (jsDoc.getTags() || [])
@@ -97,7 +96,11 @@ function generateParameterDocumentation(
 		const paramNameRaw = param.compilerNode.name?.getText();
 		// Skip parameter names if they are present in the type as an object literal
 		// e.g. destructuring; { a }: { a: string }
-		const paramName = paramNameRaw.match(/[{},]/) ? "" : ` ${paramNameRaw}`;
+		const paramName = paramNameRaw.match(/[{},]/)
+			? ""
+			: param.hasQuestionToken()
+			? ` [${paramNameRaw}]`
+			: ` ${paramNameRaw}`;
 		if (paramTag) {
 			// Replace tag with one that contains type info
 			const comment = paramTag.getComment();
@@ -463,6 +466,7 @@ function transpile(
 			result = result.slice(protectCommentsHeader.length);
 			result = result.replace(/(\S)\n((\t| )*\/\*\* @)/g, "$1\n\n$2");
 			result = result.replace(/(\t| )*\/\*\* @/g, "$1/**\n$1 * @");
+			result = result.replace(/ (\* @.+?) \*\//g, "$1\n */");
 			return `${result}\n\n${typedefs}\n\n${interfaces}`;
 		}
 		throw new Error("Could not emit output to memory.");

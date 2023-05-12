@@ -77,8 +77,8 @@ function resolve_type(node: Node, type: TypeNode | Type | undefined) {
 	// Add import(..) to types that are not in the same file
 	// Assumption: All types are first letter uppercase
 	return text.replace(
-		/(\W|^)([A-Z][a-zA-Z_$\d]*)(\W|$)/g,
-		(_, prefix, match, suffix) => {
+		/(\W|^)([A-Z][a-zA-Z_$\d]*)(?=\W|$)/g,
+		(_, prefix, match) => {
 			let is_default = false;
 			let imported = node
 				.getSourceFile()
@@ -105,7 +105,7 @@ function resolve_type(node: Node, type: TypeNode | Type | undefined) {
 				import_str = `import('${specifier}').`;
 			}
 
-			return `${prefix}${import_str}${is_default ? "default" : match}${suffix}`;
+			return `${prefix}${import_str}${is_default ? "default" : match}`;
 		}
 	);
 }

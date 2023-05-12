@@ -73,33 +73,41 @@ function resolve_type(node: Node, type: TypeNode | Type | undefined) {
 	if (!text) {
 		return "";
 	}
-	let is_default = false;
-	let imported = node
-		.getSourceFile()
-		.getImportDeclarations()
-		.find((i) => {
-			let found = !!i.getNamedImports().find((n) => {
-				return n.getName() === text;
-			});
-			if (!found) {
-				found = i.getDefaultImport()?.getText() === text;
-				if (found) {
-					is_default = true;
+
+	// Add import(..) to types that are not in the same file
+	// Assumption: All types are first letter uppercase
+	return text.replace(
+		/(\W|^)([A-Z][a-zA-Z_$\d]*)(\W|$)/g,
+		(_, prefix, match, suffix) => {
+			let is_default = false;
+			let imported = node
+				.getSourceFile()
+				.getImportDeclarations()
+				.find((i) => {
+					let found = !!i.getNamedImports().find((n) => {
+						return n.getName() === match;
+					});
+					if (!found) {
+						found = i.getDefaultImport()?.getText() === match;
+						if (found) {
+							is_default = true;
+						}
+					}
+					return found;
+				});
+
+			let import_str = "";
+			if (imported) {
+				let specifier = imported.getModuleSpecifierValue();
+				if (specifier.startsWith(".") && !specifier.endsWith(".js")) {
+					specifier = specifier + ".js";
 				}
+				import_str = `import('${specifier}').`;
 			}
-			return found;
-		});
 
-	let import_str = "";
-	if (imported) {
-		let specifier = imported.getModuleSpecifierValue();
-		if (specifier.startsWith(".") && !specifier.endsWith(".js")) {
-			specifier = specifier + ".js";
+			return `${prefix}${import_str}${is_default ? "default" : match}${suffix}`;
 		}
-		import_str = `import('${specifier}').`;
-	}
-
-	return `${import_str}${is_default ? "default" : text}`;
+	);
 }
 
 /** Sanitize a string to use as a type in a doc comment so that it is compatible with JSDoc */
@@ -312,9 +320,9 @@ function generateInitializerDocumentation(
 
 /** Document the class itself; at the moment just its extends signature */
 function generateClassBaseDocumentation(classNode: ClassDeclaration) {
-	const jsDoc = getJsDocOrCreate(classNode);
 	const extendedClass = classNode.getExtends();
 	if (extendedClass) {
+		const jsDoc = getJsDocOrCreate(classNode);
 		jsDoc.addTag({ tagName: "extends", text: extendedClass.getText() });
 	}
 }

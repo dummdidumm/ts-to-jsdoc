@@ -221,7 +221,6 @@ function generateFunctionDocumentation(
 	generateParameterDocumentation(functionNode);
 	generateReturnTypeDocumentation(functionNode);
 	functionNode.getFunctions().forEach(generateFunctionDocumentation);
-	functionNode.getVariableStatements().forEach(generateVariableDocumentation);
 }
 
 function generateVariableDocumentation(node: VariableStatement): void {
@@ -511,12 +510,13 @@ function transpile(
 
 		sourceFile.getFunctions().forEach(generateFunctionDocumentation);
 
-		sourceFile.getVariableStatements().forEach(generateVariableDocumentation);
-
 		sourceFile.getExportAssignments().forEach(generateExportDocumentation);
 
 		const traverse = (node: Node) => {
 			node.forEachChild(traverse);
+			if (Node.isVariableStatement(node)) {
+				generateVariableDocumentation(node);
+			}
 			// Do it after traversing childs because once a node is replaced, it's no longer traversable without re-getting it
 			if (Node.isAsExpression(node)) {
 				const type = resolve_type(node, node.getTypeNode());

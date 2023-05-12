@@ -119,6 +119,20 @@ function sanitizeType(str: string): string | null {
 function generateParameterDocumentation(
 	functionNode: FunctionLikeDeclaration | ArrowFunction
 ): void {
+	const generics = functionNode.getTypeParameters();
+	for (const generic of generics) {
+		const name = generic.getName();
+		const constraint = generic.getConstraint()?.getText();
+		const defaultType = generic.getDefault()?.getText();
+		const jsDoc = getJsDocOrCreate(functionNode);
+		jsDoc.addTag({
+			tagName: "template",
+			text:
+				(constraint ? `{${constraint}} ` : "") +
+				(defaultType ? `[${name}=${defaultType}` : name),
+		});
+	}
+
 	const params = functionNode.getParameters();
 	for (const param of params) {
 		const parameterType =
@@ -495,7 +509,7 @@ function transpile(
 			node.forEachChild(traverse);
 			// Do it after traversing childs because once a node is replaced, it's no longer traversable without re-getting it
 			if (Node.isAsExpression(node)) {
-				const type = node.getTypeNode().getText();
+				const type = resolve_type(node, node.getTypeNode());
 				node.replaceWithText(
 					"/** @type {" + type + "} */ (" + node.getExpression().getText() + ")"
 				);

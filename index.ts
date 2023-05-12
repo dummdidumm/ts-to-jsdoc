@@ -491,6 +491,18 @@ function transpile(
 
 		sourceFile.getExportAssignments().forEach(generateExportDocumentation);
 
+		const traverse = (node: Node) => {
+			node.forEachChild(traverse);
+			// Do it after traversing childs because once a node is replaced, it's no longer traversable without re-getting it
+			if (Node.isAsExpression(node)) {
+				const type = node.getTypeNode().getText();
+				node.replaceWithText(
+					"/** @type {" + type + "} */ (" + node.getExpression().getText() + ")"
+				);
+			}
+		};
+		sourceFile.forEachChild(traverse);
+
 		let result = project
 			.emitToMemory()
 			?.getFiles()
@@ -505,9 +517,12 @@ function transpile(
 				);
 			}
 			result = result.slice(protectCommentsHeader.length);
-			result = result.replace(/(\S)\n((\t| )*\/\*\* @)/g, "$1\n\n$2");
-			result = result.replace(/(\t| )*\/\*\* @/g, "$1/**\n$1 * @");
-			result = result.replace(/ (\* @.+?) \*\//g, "$1\n */");
+			result = result.replace(/(\S)\n((\t| )*\/\*\* @)/g, "$1\n\n$2"); // newline in front of jsdoc
+			result = result.replace(
+				/(\t| )*\/\*\* @([^\n]+\n[ \t]*\*)/gs,
+				"$1/**\n$1 * @$2"
+			); // newline after multiline jsdoc start
+			result = result.replace(/ (\* @.+?) \*\//g, "$1\n */"); // newline before multiline jsdoc end
 			return `${result}\n\n${typedefs}\n\n${interfaces}`;
 		}
 		throw new Error("Could not emit output to memory.");

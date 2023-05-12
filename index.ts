@@ -1,6 +1,7 @@
 import path from "path";
 import {
 	ArrowFunction,
+	ConstructorDeclaration,
 	ExportAssignment,
 	Node,
 	ObjectLiteralExpression,
@@ -117,7 +118,7 @@ function sanitizeType(str: string): string | null {
  * Generate @param documentation from function parameters, storing it in functionNode
  */
 function generateParameterDocumentation(
-	functionNode: FunctionLikeDeclaration | ArrowFunction
+	functionNode: FunctionLikeDeclaration | ArrowFunction | ConstructorDeclaration
 ): void {
 	const generics = functionNode.getTypeParameters();
 	for (const generic of generics) {
@@ -332,6 +333,7 @@ function generateClassMemberDocumentation(
 /** Generate documentation for a class — itself and its members */
 function generateClassDocumentation(classNode: ClassDeclaration): void {
 	generateClassBaseDocumentation(classNode);
+	classNode.getConstructors().map(generateParameterDocumentation);
 	classNode.getMembers().forEach(generateClassMemberDocumentation);
 }
 

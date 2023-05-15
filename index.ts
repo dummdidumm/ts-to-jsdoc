@@ -143,6 +143,7 @@ function generateParameterDocumentation(
 	}
 
 	const params = functionNode.getParameters();
+	let nr_complex_params = 0;
 	for (const param of params) {
 		const parameterType =
 			sanitizeType(resolve_type(param, param.getTypeNode())) || "any";
@@ -157,7 +158,7 @@ function generateParameterDocumentation(
 		// Skip parameter names if they are present in the type as an object literal
 		// e.g. destructuring; { a }: { a: string }
 		const paramName = paramNameRaw.match(/[{},]/)
-			? ""
+			? `params_${nr_complex_params++}`
 			: param.hasQuestionToken()
 			? ` [${paramNameRaw}]`
 			: ` ${paramNameRaw}`;
@@ -220,7 +221,6 @@ function generateFunctionDocumentation(
 ): void {
 	generateParameterDocumentation(functionNode);
 	generateReturnTypeDocumentation(functionNode);
-	functionNode.getFunctions().forEach(generateFunctionDocumentation);
 }
 
 function generateVariableDocumentation(node: VariableStatement): void {
@@ -231,11 +231,9 @@ function generateVariableDocumentation(node: VariableStatement): void {
 
 		const initializer = declaration.getInitializer();
 		if (
-			Node.isFunctionLikeDeclaration(initializer) ||
-			Node.isArrowFunction(initializer)
+			!Node.isFunctionLikeDeclaration(initializer) &&
+			!Node.isArrowFunction(initializer)
 		) {
-			generateFunctionDocumentation(initializer);
-		} else {
 			const type = sanitizeType(
 				resolve_type(declaration, declaration.getTypeNode())
 			);
@@ -259,14 +257,7 @@ function generateObjectLiteralExpressionDocumentation(
 			const initializer = property.getInitializer();
 			if (Node.isObjectLiteralExpression(initializer)) {
 				generateObjectLiteralExpressionDocumentation(initializer);
-			} else if (
-				Node.isFunctionLikeDeclaration(initializer) ||
-				Node.isArrowFunction(initializer)
-			) {
-				generateFunctionDocumentation(initializer);
 			}
-		} else if (Node.isMethodDeclaration(property)) {
-			generateFunctionDocumentation(property);
 		}
 	}
 }
@@ -333,14 +324,11 @@ function generateClassMemberDocumentation(
 	generateModifierDocumentation(classMemberNode);
 	Node.isObjectProperty(classMemberNode) &&
 		generateInitializerDocumentation(classMemberNode);
-	Node.isMethodDeclaration(classMemberNode) &&
-		generateFunctionDocumentation(classMemberNode);
 }
 
 /** Generate documentation for a class — itself and its members */
 function generateClassDocumentation(classNode: ClassDeclaration): void {
 	generateClassBaseDocumentation(classNode);
-	classNode.getConstructors().map(generateParameterDocumentation);
 	classNode.getMembers().forEach(generateClassMemberDocumentation);
 }
 
@@ -508,14 +496,14 @@ function transpile(
 			.map((interfaceNode) => generateInterfaceDocumentation(interfaceNode))
 			.join("\n");
 
-		sourceFile.getFunctions().forEach(generateFunctionDocumentation);
-
 		sourceFile.getExportAssignments().forEach(generateExportDocumentation);
 
 		const traverse = (node: Node) => {
 			node.forEachChild(traverse);
 			if (Node.isVariableStatement(node)) {
 				generateVariableDocumentation(node);
+			} else if (Node.isFunctionLikeDeclaration(node)) {
+				generateFunctionDocumentation(node);
 			}
 			// Do it after traversing childs because once a node is replaced, it's no longer traversable without re-getting it
 			if (Node.isAsExpression(node)) {

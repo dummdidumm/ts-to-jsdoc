@@ -291,13 +291,13 @@ function generateInitializerDocumentation(
 	classPropertyNode: ObjectProperty
 ): void {
 	const jsDoc = getJsDocOrCreate(classPropertyNode);
-	if (!classPropertyNode.getStructure()?.initializer) {
-		classPropertyNode.setInitializer("undefined");
-	}
-	const initializer = classPropertyNode.getStructure()?.initializer;
-	if (initializer !== "undefined") {
-		jsDoc.addTag({ tagName: "default", text: initializer });
-	}
+	// if (!classPropertyNode.getStructure()?.initializer) {
+	// 	classPropertyNode.setInitializer("undefined");
+	// }
+	// const initializer = classPropertyNode.getStructure()?.initializer;
+	// if (initializer !== "undefined") {
+	// 	jsDoc.addTag({ tagName: "default", text: initializer });
+	// }
 	if (classPropertyNode.getTypeNode()) {
 		const type = sanitizeType(
 			resolve_type(classPropertyNode, classPropertyNode.getTypeNode())
@@ -467,6 +467,7 @@ function transpile(
 	// typedefs/interfaces, which get transpiled to nothing but comments
 	const protectCommentsHeader =
 		"const __tsToJsdoc_protectCommentsHeader = 1;\n";
+	src = protectCommentsHeader + src;
 
 	try {
 		const project = new Project({
@@ -477,7 +478,13 @@ function transpile(
 			},
 		});
 
-		const code = protectCommentsHeader + src;
+		// Preserve blank lines in output
+		const blankLineMarker = "/* TS-TO-JSDOC BLANK LINE */";
+		const code = src
+			.split("\n")
+			.map((line) => (line.match(/^[\s\t]*$/) ? blankLineMarker + line : line))
+			.join("\n");
+
 		// ts-morph throws a fit if the path already exists
 		const sourceFile = project.createSourceFile(
 			`${path.basename(filename, ".ts")}.ts-to-jsdoc.ts`,
@@ -529,12 +536,24 @@ function transpile(
 				);
 			}
 			result = result.slice(protectCommentsHeader.length);
+			// Restore blank lines in output
+			result = result
+				.split("\n")
+				.map((_line) => {
+					const line = _line.trim();
+					return line.startsWith(blankLineMarker)
+						? line.slice(blankLineMarker.length)
+						: _line;
+				})
+				.join("\n");
 			result = result.replace(/(\S)\n((\t| )*\/\*\* @)/g, "$1\n\n$2"); // newline in front of jsdoc
 			result = result.replace(
 				/(\t| )*\/\*\* @([^\n]+\n[ \t]*\*)/gs,
 				"$1/**\n$1 * @$2"
 			); // newline after multiline jsdoc start
 			result = result.replace(/ (\* @.+?) \*\//g, "$1\n */"); // newline before multiline jsdoc end
+			result = result.replace(/from ['"](\.\.?\/.+?)['"]/g, "from '$1.js'");
+			result = result.replaceAll("    ", "\t");
 			return `${result}\n\n${typedefs}\n\n${interfaces}`;
 		}
 		throw new Error("Could not emit output to memory.");
